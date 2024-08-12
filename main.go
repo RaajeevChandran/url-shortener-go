@@ -1,19 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"math/rand"
-	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/gorilla/mux"
 )
 
 var urlStore = struct {
 	sync.RWMutex
 	urls map[string]string
 }{urls: make(map[string]string)}
+
+const saveInterval = 5 * time.Minute 
 
 func generateShortURL(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -25,48 +28,102 @@ func generateShortURL(n int) string {
 	return string(b)
 }
 
-func createShortURL(w http.ResponseWriter, r *http.Request) {
-	var requestData struct {
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
+func createShortURL(url string) string {
 	shortURL := generateShortURL(6)
 	urlStore.Lock()
-	urlStore.urls[shortURL] = requestData.URL
+	urlStore.urls[shortURL] = url
 	urlStore.Unlock()
 
-	responseData := struct {
-		ShortURL string `json:"short_url"`
-	}{
-		ShortURL: r.Host + "/" + shortURL,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(responseData)
+	return shortURL
 }
 
-func redirectURL(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	shortURL := vars["shortURL"]
-
+func redirectURL(shortURL string) (string, bool) {
 	urlStore.RLock()
 	originalURL, ok := urlStore.urls[shortURL]
 	urlStore.RUnlock()
 
-	if !ok {
-		http.NotFound(w, r)
+	return originalURL, ok
+}
+
+func saveURLsToFile(filename string) {
+	urlStore.RLock()
+	defer urlStore.RUnlock()
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
 		return
 	}
-	http.Redirect(w, r, originalURL, http.StatusFound)
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(urlStore.urls); err != nil {
+		fmt.Println("Error saving URLs:", err)
+	}
+}
+
+func startAutoSave(filename string) {
+	for {
+		time.Sleep(saveInterval)
+		saveURLsToFile(filename)
+	}
+}
+
+func loadURLsFromFile(filename string) {
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&urlStore.urls); err != nil {
+		fmt.Println("Error loading URLs:", err)
+	}
 }
 
 func main() {
-	r := mux.NewRouter()
-	r.HandleFunc("/create", createShortURL).Methods("POST")
-	r.HandleFunc("/{shortURL}", redirectURL).Methods("GET")
+	const filename = "urls.json"
+	loadURLsFromFile(filename)
 
-	http.ListenAndServe(":8080", r)
+	go startAutoSave(filename)
+
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Println("Choose an option:")
+		fmt.Println("1. Create Short URL")
+		fmt.Println("2. Redirect to Original URL")
+		fmt.Println("3. Exit")
+
+		option, _ := reader.ReadString('\n')
+		option = strings.TrimSpace(option)
+
+		switch option {
+		case "1":
+			fmt.Print("Enter the URL: ")
+			url, _ := reader.ReadString('\n')
+			url = strings.TrimSpace(url)
+
+			shortURL := createShortURL(url)
+			fmt.Printf("Short URL: %s\n", shortURL)
+
+		case "2":
+			fmt.Print("Enter the Short URL: ")
+			shortURL, _ := reader.ReadString('\n')
+			shortURL = strings.TrimSpace(shortURL)
+
+			if originalURL, ok := redirectURL(shortURL); ok {
+				fmt.Printf("Original URL: %s\n", originalURL)
+			} else {
+				fmt.Println("Short URL not found.")
+			}
+
+		case "3":
+			fmt.Println("Exiting...")
+			saveURLsToFile(filename) 
+			return
+
+		default:
+			fmt.Println("Invalid option. Please try again.")
+		}
+	}
 }
