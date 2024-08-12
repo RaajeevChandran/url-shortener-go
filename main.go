@@ -11,12 +11,18 @@ import (
 	"time"
 )
 
+type URLData struct {
+	OriginalURL string
+	Expiry      time.Time
+}
+
 var urlStore = struct {
 	sync.RWMutex
-	urls map[string]string
-}{urls: make(map[string]string)}
+	urls map[string]URLData
+}{urls: make(map[string]URLData)}
 
 const saveInterval = 5 * time.Minute 
+const expiryDuration = 24 * time.Hour
 
 func generateShortURL(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -30,8 +36,13 @@ func generateShortURL(n int) string {
 
 func createShortURL(url string) string {
 	shortURL := generateShortURL(6)
+	expiry := time.Now().Add(expiryDuration)
+
 	urlStore.Lock()
-	urlStore.urls[shortURL] = url
+	urlStore.urls[shortURL] = URLData{
+		OriginalURL: url,
+		Expiry:      expiry,
+	}
 	urlStore.Unlock()
 
 	return shortURL
@@ -39,10 +50,22 @@ func createShortURL(url string) string {
 
 func redirectURL(shortURL string) (string, bool) {
 	urlStore.RLock()
-	originalURL, ok := urlStore.urls[shortURL]
+	data, ok := urlStore.urls[shortURL]
 	urlStore.RUnlock()
 
-	return originalURL, ok
+	if !ok {
+		return "", false
+	}
+
+	// check if the URL has expired
+	if time.Now().After(data.Expiry) {
+		urlStore.Lock()
+		delete(urlStore.urls, shortURL)
+		urlStore.Unlock()
+		return "", false
+	}
+
+	return data.OriginalURL, true
 }
 
 func saveURLsToFile(filename string) {
@@ -114,7 +137,7 @@ func main() {
 			if originalURL, ok := redirectURL(shortURL); ok {
 				fmt.Printf("Original URL: %s\n", originalURL)
 			} else {
-				fmt.Println("Short URL not found.")
+				fmt.Println("Short URL not found or has expired.")
 			}
 
 		case "3":

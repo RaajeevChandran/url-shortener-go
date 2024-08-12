@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestGenerateShortURL(t *testing.T) {
@@ -20,25 +21,42 @@ func TestCreateShortURL(t *testing.T) {
 	}
 
 	urlStore.RLock()
-	originalURL, ok := urlStore.urls[shortURL]
+	data, ok := urlStore.urls[shortURL]
 	urlStore.RUnlock()
 	if !ok {
 		t.Errorf("Expected URL to be stored, but it wasn't")
 	}
-	if originalURL != url {
-		t.Errorf("Expected original URL %s, got %s", url, originalURL)
+	if data.OriginalURL != url {
+		t.Errorf("Expected original URL %s, got %s", url, data.OriginalURL)
+	}
+	if time.Now().After(data.Expiry) {
+		t.Error("URL expiry time is in the past")
 	}
 }
 
 func TestRedirectURL(t *testing.T) {
 	url := "https://google.com"
 	shortURL := createShortURL(url)
+
 	originalURL, ok := redirectURL(shortURL)
 	if !ok {
 		t.Errorf("Expected to find URL for short URL %s", shortURL)
 	}
 	if originalURL != url {
 		t.Errorf("Expected original URL %s, got %s", url, originalURL)
+	}
+
+	// simulate expiry
+	urlStore.Lock()
+	data := urlStore.urls[shortURL]
+	data.Expiry = time.Now().Add(-1 * time.Hour)
+	urlStore.urls[shortURL] = data
+	urlStore.Unlock()
+
+	// test after expiry
+	_, ok = redirectURL(shortURL)
+	if ok {
+		t.Error("Expected URL to be expired, but it wasn't")
 	}
 }
 
@@ -51,17 +69,17 @@ func TestSaveAndLoadURLs(t *testing.T) {
 	saveURLsToFile(filename)
 
 	urlStore.Lock()
-	urlStore.urls = make(map[string]string)
+	urlStore.urls = make(map[string]URLData)
 	urlStore.Unlock()
 	loadURLsFromFile(filename)
 
 	urlStore.RLock()
-	loadedURL, ok := urlStore.urls[shortURL]
+	data, ok := urlStore.urls[shortURL]
 	urlStore.RUnlock()
 	if !ok {
 		t.Errorf("Expected URL to be loaded from file, but it wasn't")
 	}
-	if loadedURL != url {
-		t.Errorf("Expected original URL %s, got %s", url, loadedURL)
+	if data.OriginalURL != url {
+		t.Errorf("Expected original URL %s, got %s", url, data.OriginalURL)
 	}
 }
