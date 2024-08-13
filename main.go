@@ -14,6 +14,7 @@ import (
 type URLData struct {
 	OriginalURL string
 	Expiry      time.Time
+	AccessCount int
 }
 
 var urlStore = struct {
@@ -42,6 +43,7 @@ func createShortURL(url string) string {
 	urlStore.urls[shortURL] = URLData{
 		OriginalURL: url,
 		Expiry:      expiry,
+		AccessCount: 0,
 	}
 	urlStore.Unlock()
 
@@ -49,9 +51,9 @@ func createShortURL(url string) string {
 }
 
 func redirectURL(shortURL string) (string, bool) {
-	urlStore.RLock()
+	urlStore.Lock()
+	defer urlStore.Unlock()
 	data, ok := urlStore.urls[shortURL]
-	urlStore.RUnlock()
 
 	if !ok {
 		return "", false
@@ -59,13 +61,27 @@ func redirectURL(shortURL string) (string, bool) {
 
 	// check if the URL has expired
 	if time.Now().After(data.Expiry) {
-		urlStore.Lock()
+		// URL has expired so delete it from the store
 		delete(urlStore.urls, shortURL)
-		urlStore.Unlock()
 		return "", false
 	}
 
+	data.AccessCount++
+	urlStore.urls[shortURL] = data
+
 	return data.OriginalURL, true
+}
+
+func getStats(shortURL string) (int, bool) {
+	urlStore.RLock()
+	defer urlStore.RUnlock()
+	data, ok := urlStore.urls[shortURL]
+
+	if !ok {
+		return 0, false
+	}
+
+	return data.AccessCount, true
 }
 
 func saveURLsToFile(filename string) {
@@ -115,7 +131,8 @@ func main() {
 		fmt.Println("Choose an option:")
 		fmt.Println("1. Create Short URL")
 		fmt.Println("2. Redirect to Original URL")
-		fmt.Println("3. Exit")
+		fmt.Println("3. View Statistics")
+		fmt.Println("4. Exit")
 
 		option, _ := reader.ReadString('\n')
 		option = strings.TrimSpace(option)
@@ -141,6 +158,17 @@ func main() {
 			}
 
 		case "3":
+			fmt.Print("Enter the Short URL to view statistics: ")
+			shortURL, _ := reader.ReadString('\n')
+			shortURL = strings.TrimSpace(shortURL)
+
+			if accessCount, ok := getStats(shortURL); ok {
+				fmt.Printf("Short URL %s has been accessed %d times.\n", shortURL, accessCount)
+			} else {
+				fmt.Println("Short URL not found or has expired.")
+			}
+
+		case "4":
 			fmt.Println("Exiting...")
 			saveURLsToFile(filename) 
 			return
