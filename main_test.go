@@ -32,9 +32,12 @@ func TestCreateShortURL(t *testing.T) {
 	if time.Now().After(data.Expiry) {
 		t.Error("URL expiry time is in the past")
 	}
+	if data.AccessCount != 0 {
+		t.Errorf("Expected access count to be 0, got %d", data.AccessCount)
+	}
 }
 
-func TestRedirectURL(t *testing.T) {
+func TestRedirectURLBeforeExpiry(t *testing.T) {
 	url := "https://google.com"
 	shortURL := createShortURL(url)
 
@@ -46,6 +49,18 @@ func TestRedirectURL(t *testing.T) {
 		t.Errorf("Expected original URL %s, got %s", url, originalURL)
 	}
 
+	urlStore.RLock()
+	data := urlStore.urls[shortURL]
+	urlStore.RUnlock()
+	if data.AccessCount != 1 {
+		t.Errorf("Expected access count to be 1, got %d", data.AccessCount)
+	}
+}
+
+func TestRedirectURLAfterExpiry(t *testing.T) {
+	url := "https://google.com"
+	shortURL := createShortURL(url)
+	
 	// simulate expiry
 	urlStore.Lock()
 	data := urlStore.urls[shortURL]
@@ -54,15 +69,32 @@ func TestRedirectURL(t *testing.T) {
 	urlStore.Unlock()
 
 	// test after expiry
-	_, ok = redirectURL(shortURL)
+	_, ok := redirectURL(shortURL)
 	if ok {
 		t.Error("Expected URL to be expired, but it wasn't")
 	}
 }
 
+func TestGetStats(t *testing.T) {
+	url := "https://google.com"
+	shortURL := createShortURL(url)
+
+	for i := 0; i < 3; i++ {
+		redirectURL(shortURL)
+	}
+
+	accessCount, ok := getStats(shortURL)
+	if !ok {
+		t.Errorf("Expected to find stats for short URL %s", shortURL)
+	}
+	if accessCount != 3 {
+		t.Errorf("Expected access count to be 3, got %d", accessCount)
+	}
+}
+
 func TestSaveAndLoadURLs(t *testing.T) {
 	const filename = "test_urls.json"
-	defer os.Remove(filename) 
+	defer os.Remove(filename)
 
 	url := "https://google.com"
 	shortURL := createShortURL(url)
@@ -81,5 +113,11 @@ func TestSaveAndLoadURLs(t *testing.T) {
 	}
 	if data.OriginalURL != url {
 		t.Errorf("Expected original URL %s, got %s", url, data.OriginalURL)
+	}
+	if time.Now().After(data.Expiry) {
+		t.Error("Loaded URL expiry time is in the past")
+	}
+	if data.AccessCount != 0 {
+		t.Errorf("Expected access count to be 0, got %d", data.AccessCount)
 	}
 }
